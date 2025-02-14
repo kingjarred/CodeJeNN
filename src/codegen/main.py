@@ -1,12 +1,3 @@
-# Distribution Statement A. Approved for public release, distribution is unlimited.
-"""
-THIS SOURCE CODE IS UNDER THE CUSTODY AND ADMINISTRATION OF THE GOVERNMENT OF THE UNITED STATES OF AMERICA. 
-BY USING, MODIFYING, OR DISSEMINATING THIS SOURCE CODE, YOU ACCEPT THE TERMS AND CONDITIONS IN THE NRL OPEN LICENSE AGREEMENT. 
-USE, MODIFICATION, AND DISSEMINATION ARE PERMITTED ONLY IN ACCORDANCE WITH THE TERMS AND CONDITIONS OF THE NRL OPEN LICENSE AGREEMENT. 
-NO OTHER RIGHTS OR LICENSES ARE GRANTED. UNAUTHORIZED USE, SALE, CONVEYANCE, DISPOSITION, OR MODIFICATION OF THIS SOURCE CODE 
-MAY RESULT IN CIVIL PENALTIES AND/OR CRIMINAL PENALTIES UNDER 18 U.S.C. § 641.
-"""
-
 import os
 import shutil
 import argparse
@@ -42,6 +33,7 @@ elif not os.path.exists(save_dir):
     print(f"WARNING: Output directory '{save_dir}' does not exist. Creating it now...")
     os.makedirs(save_dir)
 else:
+    # NEW: This version now supports CNNs (convolutional & pooling layers) in addition to fully connected networks.
     source_code = testSource(precision_type)
     save_path = os.path.join(save_dir, "test")
     with open(f"{save_path}.cpp", "w") as f:

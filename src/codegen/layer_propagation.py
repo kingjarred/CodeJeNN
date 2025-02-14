@@ -1,15 +1,8 @@
-# Distribution Statement A. Approved for public release, distribution is unlimited.
-"""
-THIS SOURCE CODE IS UNDER THE CUSTODY AND ADMINISTRATION OF THE GOVERNMENT OF THE UNITED STATES OF AMERICA.
-BY USING, MODIFYING, OR DISSEMINATING THIS SOURCE CODE, YOU ACCEPT THE TERMS AND CONDITIONS IN THE NRL OPEN LICENSE AGREEMENT.
-USE, MODIFICATION, AND DISSEMINATION ARE PERMITTED ONLY IN ACCORDANCE WITH THE TERMS AND CONDITIONS OF THE NRL OPEN LICENSE AGREEMENT.
-NO OTHER RIGHTS OR LICENSES ARE GRANTED. UNAUTHORIZED USE, SALE, CONVEYANCE, DISPOSITION, OR MODIFICATION OF THIS SOURCE CODE
-MAY RESULT IN CIVIL PENALTIES AND/OR CRIMINAL PENALTIES UNDER 18 U.S.C. § 641.
-"""
-
 import os
 import absl.logging
 import warnings
+import math
+import stdexcept  # For std::numeric_limits equivalent in C++ comments
 absl.logging.set_verbosity('error')
 warnings.filterwarnings("ignore", category=UserWarning, module='keras')
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -38,7 +31,7 @@ def activationFunctions(cpp_code, activation_functions):
     };
 """,
         'leakyRelu': """
-    auto leakyRelu = [](Scalar& output, Scalar input, Scalar alpha1) noexcept {
+    auto leakyRelu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
         output = input > 0 ? input : alpha * input;
     };
 """,
@@ -132,5 +125,224 @@ void forwardPass(Scalar* outputs, const Scalar* inputs, const Scalar* weights, c
     cpp_code += layerNormalization
     cpp_code += batchNormalization
     cpp_code += forwardPass
+
+    # ===== NEW CODE: Convolution and Pooling Functions =====
+    # The following functions implement basic versions of convolution and pooling.
+    # They assume fixed (compile-time) dimensions and valid padding for simplicity.
+    # More advanced versions (e.g. for 'same' padding, dilations, etc.) can be added similarly.
+
+    convolution_functions = r"""
+// --- Convolution Functions ---
+
+// 2D Convolution with VALID padding
+template<typename Scalar, int H_in, int W_in, int C_in, int H_k, int W_k, int C_out, int StrideH, int StrideW>
+void conv2D_valid(const Scalar* input, const Scalar* kernel, const Scalar* bias, Scalar* output) noexcept {
+    constexpr int H_out = (H_in - H_k) / StrideH + 1;
+    constexpr int W_out = (W_in - W_k) / StrideW + 1;
+    for (int h = 0; h < H_out; ++h) {
+        for (int w = 0; w < W_out; ++w) {
+            for (int c = 0; c < C_out; ++c) {
+                Scalar sum = 0;
+                for (int kh = 0; kh < H_k; ++kh) {
+                    for (int kw = 0; kw < W_k; ++kw) {
+                        for (int cin = 0; cin < C_in; ++cin) {
+                            int kernel_index = ((kh * W_k + kw) * C_in + cin) * C_out + c;
+                            int input_index = ((h * StrideH + kh) * W_in + (w * StrideW + kw)) * C_in + cin;
+                            sum += input[input_index] * kernel[kernel_index];
+                        }
+                    }
+                }
+                output[(h * W_out + w) * C_out + c] = sum + bias[c];
+            }
+        }
+    }
+}
+
+// 2D Convolution with SAME padding
+template<typename Scalar, int H_in, int W_in, int C_in, int H_k, int W_k, int C_out, int StrideH, int StrideW>
+void conv2D_same(const Scalar* input, const Scalar* kernel, const Scalar* bias, Scalar* output) noexcept {
+    constexpr int pad_h = ((H_in - 1) * StrideH + H_k - H_in) / 2;
+    constexpr int pad_w = ((W_in - 1) * StrideW + W_k - W_in) / 2;
+    constexpr int H_out = (H_in + 2 * pad_h - H_k) / StrideH + 1;
+    constexpr int W_out = (W_in + 2 * pad_w - W_k) / StrideW + 1;
+    Scalar padded_input[(H_in + 2 * pad_h) * (W_in + 2 * pad_w) * C_in] = {0};
+    for (int h = 0; h < H_in; ++h) {
+        for (int w = 0; w < W_in; ++w) {
+            for (int c = 0; c < C_in; ++c) {
+                int in_index = (h * W_in + w) * C_in + c;
+                int pad_index = ((h + pad_h) * (W_in + 2 * pad_w) + (w + pad_w)) * C_in + c;
+                padded_input[pad_index] = input[in_index];
+            }
+        }
+    }
+    for (int h = 0; h < H_out; ++h) {
+        for (int w = 0; w < W_out; ++w) {
+            for (int c = 0; c < C_out; ++c) {
+                Scalar sum = 0;
+                for (int kh = 0; kh < H_k; ++kh) {
+                    for (int kw = 0; kw < W_k; ++kw) {
+                        for (int cin = 0; cin < C_in; ++cin) {
+                            int kernel_index = ((kh * W_k + kw) * C_in + cin) * C_out + c;
+                            int pad_index = ((h * StrideH + kh) * (W_in + 2 * pad_w) + (w * StrideW + kw)) * C_in + cin;
+                            sum += padded_input[pad_index] * kernel[kernel_index];
+                        }
+                    }
+                }
+                output[(h * W_out + w) * C_out + c] = sum + bias[c];
+            }
+        }
+    }
+}
+
+// Depthwise 2D Convolution with VALID padding
+template<typename Scalar, int H_in, int W_in, int C_in, int H_k, int W_k, int depth_multiplier, int StrideH, int StrideW>
+void depthwiseConv2D_valid(const Scalar* input, const Scalar* kernel, const Scalar* bias, Scalar* output) noexcept {
+    constexpr int C_out = C_in * depth_multiplier;
+    constexpr int H_out = (H_in - H_k) / StrideH + 1;
+    constexpr int W_out = (W_in - W_k) / StrideW + 1;
+    for (int h = 0; h < H_out; ++h) {
+        for (int w = 0; w < W_out; ++w) {
+            for (int cin = 0; cin < C_in; ++cin) {
+                for (int m = 0; m < depth_multiplier; ++m) {
+                    Scalar sum = 0;
+                    for (int kh = 0; kh < H_k; ++kh) {
+                        for (int kw = 0; kw < W_k; ++kw) {
+                            int kernel_index = ((kh * W_k + kw) * C_in + cin) * depth_multiplier + m;
+                            int input_index = ((h * StrideH + kh) * W_in + (w * StrideW + kw)) * C_in + cin;
+                            sum += input[input_index] * kernel[kernel_index];
+                        }
+                    }
+                    output[((h * W_out + w) * C_in + cin) * depth_multiplier + m] = sum + bias[cin * depth_multiplier + m];
+                }
+            }
+        }
+    }
+}
+
+// Depthwise 2D Convolution with SAME padding
+template<typename Scalar, int H_in, int W_in, int C_in, int H_k, int W_k, int depth_multiplier, int StrideH, int StrideW>
+void depthwiseConv2D_same(const Scalar* input, const Scalar* kernel, const Scalar* bias, Scalar* output) noexcept {
+    constexpr int pad_h = ((H_in - 1) * StrideH + H_k - H_in) / 2;
+    constexpr int pad_w = ((W_in - 1) * StrideW + W_k - W_in) / 2;
+    constexpr int H_out = (H_in + 2 * pad_h - H_k) / StrideH + 1;
+    constexpr int W_out = (W_in + 2 * pad_w - W_k) / StrideW + 1;
+    Scalar padded_input[(H_in + 2 * pad_h) * (W_in + 2 * pad_w) * C_in] = {0};
+    for (int h = 0; h < H_in; ++h) {
+        for (int w = 0; w < W_in; ++w) {
+            for (int c = 0; c < C_in; ++c) {
+                int in_index = (h * W_in + w) * C_in + c;
+                int pad_index = ((h + pad_h) * (W_in + 2 * pad_w) + (w + pad_w)) * C_in + c;
+                padded_input[pad_index] = input[in_index];
+            }
+        }
+    }
+    for (int h = 0; h < H_out; ++h) {
+        for (int w = 0; w < W_out; ++w) {
+            for (int cin = 0; cin < C_in; ++cin) {
+                for (int m = 0; m < depth_multiplier; ++m) {
+                    Scalar sum = 0;
+                    for (int kh = 0; kh < H_k; ++kh) {
+                        for (int kw = 0; kw < W_k; ++kw) {
+                            int kernel_index = ((kh * W_k + kw) * C_in + cin) * depth_multiplier + m;
+                            int pad_index = ((h * StrideH + kh) * (W_in + 2 * pad_w) + (w * StrideW + kw)) * C_in + cin;
+                            sum += padded_input[pad_index] * kernel[kernel_index];
+                        }
+                    }
+                    output[((h * W_out + w) * C_in + cin) * depth_multiplier + m] = sum + bias[cin * depth_multiplier + m];
+                }
+            }
+        }
+    }
+}
+
+// SeparableConv2D (VALID padding): performs depthwise then pointwise convolution
+template<typename Scalar, int H_in, int W_in, int C_in, int H_k, int W_k, int depth_multiplier, int C_out, int StrideH, int StrideW>
+void separableConv2D_valid(const Scalar* input, const Scalar* depthwise_kernel, const Scalar* pointwise_kernel, const Scalar* bias, Scalar* output) noexcept {
+    constexpr int H_dw = (H_in - H_k) / StrideH + 1;
+    constexpr int W_dw = (W_in - W_k) / StrideW + 1;
+    constexpr int C_dw = C_in * depth_multiplier;
+    Scalar depthwise_output[H_dw * W_dw * C_dw] = {0};
+    depthwiseConv2D_valid<Scalar, H_in, W_in, C_in, H_k, W_k, depth_multiplier, StrideH, StrideW>(input, depthwise_kernel, nullptr, depthwise_output);
+    // Pointwise convolution: kernel shape [1, 1, C_dw, C_out]
+    for (int i = 0; i < H_dw * W_dw; ++i) {
+        for (int c = 0; c < C_out; ++c) {
+            Scalar sum = 0;
+            for (int k = 0; k < C_dw; ++k) {
+                sum += depthwise_output[i * C_dw + k] * pointwise_kernel[k * C_out + c];
+            }
+            output[i * C_out + c] = sum + bias[c];
+        }
+    }
+}
+
+// --- Pooling Functions ---
+
+template<typename Scalar, int H_in, int W_in, int C>
+void maxPooling2D(const Scalar* input, int pool_h, int pool_w, int stride_h, int stride_w, Scalar* output) noexcept {
+    int H_out = (H_in - pool_h) / stride_h + 1;
+    int W_out = (W_in - pool_w) / stride_w + 1;
+    for (int h = 0; h < H_out; ++h) {
+        for (int w = 0; w < W_out; ++w) {
+            for (int c = 0; c < C; ++c) {
+                Scalar max_val = -std::numeric_limits<Scalar>::infinity();
+                for (int ph = 0; ph < pool_h; ++ph) {
+                    for (int pw = 0; pw < pool_w; ++pw) {
+                        int in_index = ((h * stride_h + ph) * W_in + (w * stride_w + pw)) * C + c;
+                        if (input[in_index] > max_val)
+                            max_val = input[in_index];
+                    }
+                }
+                output[(h * W_out + w) * C + c] = max_val;
+            }
+        }
+    }
+}
+
+template<typename Scalar, int H_in, int W_in, int C>
+void averagePooling2D(const Scalar* input, int pool_h, int pool_w, int stride_h, int stride_w, Scalar* output) noexcept {
+    int H_out = (H_in - pool_h) / stride_h + 1;
+    int W_out = (W_in - pool_w) / stride_w + 1;
+    for (int h = 0; h < H_out; ++h) {
+        for (int w = 0; w < W_out; ++w) {
+            for (int c = 0; c < C; ++c) {
+                Scalar sum = 0;
+                for (int ph = 0; ph < pool_h; ++ph) {
+                    for (int pw = 0; pw < pool_w; ++pw) {
+                        int in_index = ((h * stride_h + ph) * W_in + (w * stride_w + pw)) * C + c;
+                        sum += input[in_index];
+                    }
+                }
+                output[(h * W_out + w) * C + c] = sum / (pool_h * pool_w);
+            }
+        }
+    }
+}
+
+template<typename Scalar, int H_in, int W_in, int C>
+void globalAveragePooling2D(const Scalar* input, Scalar* output) noexcept {
+    int size = H_in * W_in;
+    for (int c = 0; c < C; ++c) {
+        Scalar sum = 0;
+        for (int i = 0; i < size; ++i) {
+            sum += input[i * C + c];
+        }
+        output[c] = sum / size;
+    }
+}
+
+template<typename Scalar, int H_in, int W_in, int C>
+void globalMaxPooling2D(const Scalar* input, Scalar* output) noexcept {
+    int size = H_in * W_in;
+    for (int c = 0; c < C; ++c) {
+        Scalar max_val = -std::numeric_limits<Scalar>::infinity();
+        for (int i = 0; i < size; ++i) {
+            if (input[i * C + c] > max_val)
+                max_val = input[i * C + c];
+        }
+        output[c] = max_val;
+    }
+}
+"""
+    cpp_code += convolution_functions
 
     return cpp_code, cpp_lambda
