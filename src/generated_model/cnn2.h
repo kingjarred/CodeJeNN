@@ -1,77 +1,15 @@
-import os
-import absl.logging
-import warnings
-import math
-# import stdexcept  # For std::numeric_limits equivalent in C++ comments
-absl.logging.set_verbosity('error')
-warnings.filterwarnings("ignore", category=UserWarning, module='keras')
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+#pragma once
+#include <iostream>
+#include <array>
+#include <random>
+#include <cmath>
+#include <functional>
 
+// Added for convolution and pooling functions
+#include <limits>
 
-def activationFunctions(cpp_code, activation_functions):
-    """
-    generate C++ lambda-based activation functions (with no indentation for the lambdas)
-    and normalization functions. ForwardPass also remains as Code 2 style.
-    """
+//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\// 
 
-    lambda_defs = {
-        'relu': """
-    auto relu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input > 0 ? input : 0;
-    };
-""",
-        'sigmoid': """
-    auto sigmoid = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = 1 / (1 + std::exp(-input));
-    };
-""",
-        'tanhCustom': """
-    auto tanhCustom = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = std::tanh(input);
-    };
-""",
-        'leakyRelu': """
-    auto leakyRelu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input > 0 ? input : alpha * input;
-    };
-""",
-        'linear': """
-    auto linear = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input;
-    };
-""",
-        'elu': """
-    auto elu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input > 0 ? input : alpha * (std::exp(input) - 1);
-    };
-""",
-        'selu': """
-    template<typename T> constexpr T SELU_LAMBDA = static_cast<T>(1.0507009873554804934193349852946);
-    template<typename T> constexpr T SELU_ALPHA = static_cast<T>(1.6732632423543772848170429916717);
-    auto selu = [](Scalar& output, Scalar input, Scalar alpha = SELU_ALPHA<double>) noexcept {
-        using Scalar = decltype(input);
-        output = SELU_LAMBDA<Scalar> * (input > 0 ? input : alpha * (std::exp(input) - 1));
-    };
-""",
-        'swish': """
-    auto swish = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input / (1 + std::exp(-alpha * input));
-    };
-""",
-        'prelu': """
-    auto prelu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input > 0 ? input : alpha * input;
-    };
-""",
-        'silu': """
-    auto silu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        auto sigmoid = 1 / (1 + std::exp(-input));
-        output = input * sigmoid;
-    };
-"""
-    }
-
-    layerNormalization = """
 template<typename Scalar, int size>
 void layerNormalization(Scalar* outputs, const Scalar* inputs, const Scalar* gamma, const Scalar* beta, Scalar epsilon) noexcept {
     Scalar mean = 0;
@@ -88,18 +26,14 @@ void layerNormalization(Scalar* outputs, const Scalar* inputs, const Scalar* gam
         outputs[i] = gamma[i] * ((inputs[i] - mean) / std::sqrt(variance + epsilon)) + beta[i];
     }
 }
-"""
 
-    batchNormalization = """
 template<typename Scalar, int size>
 void batchNormalization(Scalar* outputs, const Scalar* inputs, const Scalar* gamma, const Scalar* beta, const Scalar* mean, const Scalar* variance, const Scalar epsilon) noexcept {
     for (int i = 0; i < size; ++i) {
         outputs[i] = gamma[i] * ((inputs[i] - mean[i]) / std::sqrt(variance[i] + epsilon)) + beta[i];
     }
 }
-"""
 
-    forwardPass = """
 template<typename Scalar, int output_size>
 void forwardPass(Scalar* outputs, const Scalar* inputs, const Scalar* weights, const Scalar* biases, int input_size, activationFunction<Scalar> activation_function, Scalar alpha) noexcept {
     for(int i = 0; i < output_size; ++i){
@@ -111,27 +45,7 @@ void forwardPass(Scalar* outputs, const Scalar* inputs, const Scalar* weights, c
         activation_function(outputs[i], sum, alpha);
     }
 }
-"""
 
-    current_activations = set(activation_functions)
-    current_activations = {('tanhCustom' if act == 'tanh' else act) for act in current_activations if act is not None}
-
-    cpp_lambda = """    //\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\// \n"""
-
-    for act in current_activations:
-        if act in lambda_defs:
-            cpp_lambda += lambda_defs[act]
-
-    cpp_code += layerNormalization
-    cpp_code += batchNormalization
-    cpp_code += forwardPass
-
-    # ===== NEW CODE: Convolution and Pooling Functions =====
-    # The following functions implement basic versions of convolution and pooling.
-    # They assume fixed (compile-time) dimensions and valid padding for simplicity.
-    # More advanced versions (e.g. for 'same' padding, dilations, etc.) can be added similarly.
-
-    convolution_functions = r"""
 // --- Convolution Functions ---
 
 // 2D Convolution with VALID padding
@@ -342,7 +256,93 @@ void globalMaxPooling2D(const Scalar* input, Scalar* output) noexcept {
         output[c] = max_val;
     }
 }
-"""
-    cpp_code += convolution_functions
 
-    return cpp_code, cpp_lambda
+template <typename Scalar = double>
+auto cnn2(const std::array<Scalar, 64>& initial_input) { 
+    std::array<Scalar, 64> model_input = initial_input;
+
+    if (model_input.size() != 64) { throw std::invalid_argument("Invalid input size. Expected size: 64"); }
+
+    //\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\// 
+
+    // Layer 1 (DepthwiseConv2D) shapes:
+    constexpr std::array<int, 3> layer_1_input_shape = {8, 8, 1};
+    constexpr std::array<int, 3> layer_1_output_shape = {8, 8, 1};
+    constexpr std::array<int, 2> layer_1_strides = {1, 1};
+    constexpr std::array<int, 2> layer_1_dilation_rate = {1, 1};
+    constexpr std::array<int, 4> layer_1_kernel_shape = {3, 3, 1, 1};
+
+    // Layer 2 (Conv2D) shapes:
+    constexpr std::array<int, 3> layer_2_input_shape = {8, 8, 1};
+    constexpr std::array<int, 3> layer_2_output_shape = {8, 8, 8};
+    constexpr std::array<int, 2> layer_2_strides = {1, 1};
+    constexpr std::array<int, 2> layer_2_dilation_rate = {1, 1};
+    constexpr std::array<int, 4> layer_2_kernel_shape = {1, 1, 1, 8};
+
+    constexpr std::array<Scalar, 1> gamma_2 = {1.003717065e+00};
+
+    constexpr std::array<Scalar, 1> beta_2 = {4.168121377e-04};
+
+    constexpr std::array<Scalar, 1> mean_2 = {5.972413719e-02};
+
+    constexpr std::array<Scalar, 1> variance_2 = {8.717867732e-01};
+
+    constexpr Scalar epsilon_2 = 1.000000000e-03;
+
+    // Layer 3 (SeparableConv2D) shapes:
+    constexpr std::array<int, 3> layer_3_input_shape = {8, 8, 8};
+    constexpr std::array<int, 3> layer_3_output_shape = {8, 8, 16};
+    constexpr std::array<int, 2> layer_3_strides = {1, 1};
+    constexpr std::array<int, 2> layer_3_dilation_rate = {1, 1};
+    constexpr std::array<int, 4> layer_3_depthwise_kernel_shape = {3, 3, 8, 1};
+    constexpr std::array<int, 4> layer_3_pointwise_kernel_shape = {1, 1, 8, 16};
+
+    // Layer 4 (SeparableConv2D) shapes:
+    constexpr std::array<int, 3> layer_4_input_shape = {8, 8, 16};
+    constexpr std::array<int, 3> layer_4_output_shape = {8, 8, 16};
+    constexpr std::array<int, 2> layer_4_strides = {1, 1};
+    constexpr std::array<int, 2> layer_4_dilation_rate = {1, 1};
+    constexpr std::array<int, 4> layer_4_depthwise_kernel_shape = {3, 3, 16, 1};
+    constexpr std::array<int, 4> layer_4_pointwise_kernel_shape = {1, 1, 16, 16};
+
+    // Layer 5 (GlobalAveragePooling2D) shapes:
+    constexpr std::array<int, 3> layer_5_input_shape = {8, 8, 16};
+    constexpr std::array<int, 1> layer_5_output_shape = {16};
+
+    constexpr std::array<Scalar, 8> gamma_5 = {9.933949709e-01, 1.003688455e+00, 1.000033498e+00, 1.001585841e+00, 9.962819219e-01, 1.003177285e+00, 1.007835746e+00, 9.962002039e-01};
+
+    constexpr std::array<Scalar, 8> beta_5 = {-7.676446345e-03, 1.702864887e-03, -5.697892047e-04, -1.011130749e-03, -9.419163689e-03, 3.146166215e-03, 9.072840214e-03, -5.643260665e-03};
+
+    constexpr std::array<Scalar, 8> mean_5 = {-2.591326274e-02, 3.080378473e-02, 1.869287342e-02, -1.981435344e-02, 1.026751846e-02, 6.722514052e-03, -7.810470648e-03, -4.235666990e-02};
+
+    constexpr std::array<Scalar, 8> variance_5 = {8.694076538e-01, 8.732753396e-01, 8.649318814e-01, 8.655180335e-01, 8.615244031e-01, 8.606932759e-01, 8.609102368e-01, 8.850330114e-01};
+
+    constexpr Scalar epsilon_5 = 1.000000000e-03;
+
+    //\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\// 
+
+    auto linear = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
+        output = input;
+    };
+
+    //\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\// 
+
+    std::array<Scalar, 64> layer_1_output;
+    depthwiseConv2D_same<Scalar, 8, 8, 1, 3, 3, 1, 1, 1>( model_input.data(), weights_1.data(), biases_1.data(), layer_1_output.data() );
+
+    std::array<Scalar, 512> layer_2_output;
+    conv2D_same<Scalar, 8, 8, 1, 1, 1, 8, 1, 1>( layer_1_output.data(), weights_2.data(), biases_2.data(), layer_2_output.data() );
+
+    std::array<Scalar, 1024> layer_3_output;
+    separableConv2D_valid<Scalar, 8, 8, 8, 3, 3, 1, 16, 1, 1>( layer_2_output.data(), weights_3_depthwise.data(), weights_3_pointwise.data(), biases_3.data(), layer_3_output.data() );
+
+    std::array<Scalar, 1024> layer_4_output;
+    separableConv2D_valid<Scalar, 8, 8, 16, 3, 3, 1, 16, 1, 1>( layer_3_output.data(), weights_4_depthwise.data(), weights_4_pointwise.data(), biases_4.data(), layer_4_output.data() );
+
+    std::array<Scalar, 16> layer_5_output;
+    globalAveragePooling2D<Scalar, 8, 8, 16>( layer_4_output.data(), layer_5_output.data() );
+
+    std::array<Scalar, 16> model_output = layer_5_output;
+
+    return model_output;
+}

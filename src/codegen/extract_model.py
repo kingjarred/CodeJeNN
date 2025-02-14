@@ -21,16 +21,9 @@ def getAlphaForActivation(layer, activation):
 
 
 def extractModel(model, file_type):
-    weights_list = []
-    biases_list = []
-    activation_functions = []
-    alphas = []
-    dropout_rates = []
-    norm_layer_params = []
-    conv_layer_params = []
+    weights_list, biases_list, activation_functions, alphas, dropout_rates, norm_layer_params, conv_layer_params = [], [], [], [], [], [], []
 
     if file_type in ['.h5', '.keras']:
-        # Loop through each layer in the Keras model
         for layer in model.layers:
             layer_weights = layer.get_weights()
 
@@ -38,12 +31,36 @@ def extractModel(model, file_type):
             # Supports: Conv2D, SeparableConv2D, ConvLSTM2D, Conv1D, Conv3D, Conv2DTranspose, DepthwiseConv2D, LocallyConnected2D
             if isinstance(layer, (keras.layers.Conv2D, keras.layers.SeparableConv2D, keras.layers.ConvLSTM2D,
                                   keras.layers.Conv1D, keras.layers.Conv3D, keras.layers.Conv2DTranspose,
-                                  keras.layers.DepthwiseConv2D, keras.layers.LocallyConnected2D)):
+                                  keras.layers.DepthwiseConv2D)):
                 config = layer.get_config()
                 conv_param = {}
                 conv_param["layer_type"] = layer.__class__.__name__
-                conv_param["input_shape"] = layer.input_shape
-                conv_param["output_shape"] = layer.output_shape
+                # Try to get input_shape
+                try:
+                    conv_param["input_shape"] = layer.input_shape
+                except AttributeError:
+                    conv_param["input_shape"] = getattr(layer, "_batch_input_shape", None)
+                if conv_param["input_shape"] is None and hasattr(layer, "input") and layer.input is not None:
+                    if isinstance(layer.input, tuple):
+                        conv_param["input_shape"] = list(layer.input[0].shape)
+                    else:
+                        try:
+                            conv_param["input_shape"] = layer.input.shape.as_list()
+                        except AttributeError:
+                            conv_param["input_shape"] = list(layer.input.shape)
+                # Try to get output_shape similarly
+                try:
+                    conv_param["output_shape"] = layer.output_shape
+                except AttributeError:
+                    conv_param["output_shape"] = getattr(layer, "_batch_output_shape", None)
+                if conv_param["output_shape"] is None and hasattr(layer, "output") and layer.output is not None:
+                    if isinstance(layer.output, tuple):
+                        conv_param["output_shape"] = list(layer.output[0].shape)
+                    else:
+                        try:
+                            conv_param["output_shape"] = layer.output.shape.as_list()
+                        except AttributeError:
+                            conv_param["output_shape"] = list(layer.output.shape)
                 conv_param["strides"] = config.get("strides", (1, 1))
                 conv_param["padding"] = config.get("padding", "valid")
                 conv_param["dilation_rate"] = config.get("dilation_rate", (1, 1))
@@ -106,8 +123,30 @@ def extractModel(model, file_type):
                 config = layer.get_config()
                 pool_param = {}
                 pool_param["layer_type"] = layer.__class__.__name__
-                pool_param["input_shape"] = layer.input_shape
-                pool_param["output_shape"] = layer.output_shape
+                try:
+                    pool_param["input_shape"] = layer.input_shape
+                except AttributeError:
+                    pool_param["input_shape"] = getattr(layer, "_batch_input_shape", None)
+                if pool_param["input_shape"] is None and hasattr(layer, "input") and layer.input is not None:
+                    if isinstance(layer.input, tuple):
+                        pool_param["input_shape"] = list(layer.input[0].shape)
+                    else:
+                        try:
+                            pool_param["input_shape"] = layer.input.shape.as_list()
+                        except AttributeError:
+                            pool_param["input_shape"] = list(layer.input.shape)
+                try:
+                    pool_param["output_shape"] = layer.output_shape
+                except AttributeError:
+                    pool_param["output_shape"] = getattr(layer, "_batch_output_shape", None)
+                if pool_param["output_shape"] is None and hasattr(layer, "output") and layer.output is not None:
+                    if isinstance(layer.output, tuple):
+                        pool_param["output_shape"] = list(layer.output[0].shape)
+                    else:
+                        try:
+                            pool_param["output_shape"] = layer.output.shape.as_list()
+                        except AttributeError:
+                            pool_param["output_shape"] = list(layer.output.shape)
                 pool_param["pool_size"] = config.get("pool_size", None)
                 pool_param["strides"] = config.get("strides", None)
                 pool_param["padding"] = config.get("padding", "valid")
@@ -233,21 +272,20 @@ def extractModel(model, file_type):
                 activation_functions.append(activation if activation != 'linear' else 'linear')
                 alphas.append(getAlphaForActivation(layer, activation))
                 dropout_rates.append(layer.rate if 'dropout' in layer.name.lower() else 0.0)
-                # conv_layer_params already appended as None
-            # End of layer loop
+        # End of layer loop
 
         activation_functions = [act['class_name'] if isinstance(act, dict) else act for act in activation_functions]
-        activation_functions = ['leakyRelu' if act == 'LeakyReLU' else act for act in activation_functions]
-        # Determine input_size: for CNNs, flatten the spatial dimensions
-        if hasattr(model.layers[0], 'input_shape'):
+        activation_functions = ['leakyRelu' if act == 'LeakyRelu' else act for act in activation_functions]
+        # Determine input_size using model.input_shape (expects a tuple like (None, 8, 8, 1))
+        if hasattr(model, "input_shape") and model.input_shape is not None:
+            import numpy as np
+            input_size = int(np.prod(model.input_shape[1:]))
+        elif hasattr(model.layers[0], 'input_shape'):
             in_shape = model.layers[0].input_shape
-            if isinstance(in_shape, tuple) and len(in_shape) > 2:
-                import numpy as np
-                input_size = int(np.prod(in_shape[1:]))
-            else:
-                input_size = in_shape[1]
+            import numpy as np
+            input_size = int(np.prod(in_shape[1:]))
         else:
-            input_size = model.input_shape[1]
+            raise ValueError("Unable to determine model input shape.")
 
     elif file_type == '.onnx':
         for initializer in model.graph.initializer:

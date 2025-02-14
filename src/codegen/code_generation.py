@@ -120,16 +120,15 @@ auto {name_space}(const std::array<Scalar, {input_size}>& initial_input) {{
             cpp_code += f"    constexpr std::array<Scalar, {len(biases_flat)}> biases_{layer_index} = {{"
             cpp_code += ", ".join(f"{x:10.9e}" for x in biases_flat)
             cpp_code += "};\n\n"
-        # For convolution or pooling layers, we assume weights/biases are stored inside conv_params.
+        # For convolution or pooling layers, we assume parameters are stored inside conv_params.
         elif conv_params is not None:
-            # For standard convolutional layers (including Conv2D, Conv2DTranspose, DepthwiseConv2D, etc.)
             conv_type = conv_params.get("layer_type", "")
-            # Generate comments and constexpr arrays for layer shapes and parameters
             cpp_code += f"    // Layer {layer_index} ({conv_type}) shapes:\n"
             if "input_shape" in conv_params and conv_params["input_shape"] is not None:
-                # Exclude batch dimension (assumed at index 0)
                 in_shape = conv_params["input_shape"][1:]
                 cpp_code += f"    constexpr std::array<int, {len(in_shape)}> layer_{layer_index}_input_shape = {{{', '.join(str(x) for x in in_shape)}}};\n"
+            else:
+                raise ValueError(f"Missing input_shape for convolution/pooling layer {layer_index} of type {conv_type}")
             if "output_shape" in conv_params and conv_params["output_shape"] is not None:
                 out_shape = conv_params["output_shape"][1:]
                 cpp_code += f"    constexpr std::array<int, {len(out_shape)}> layer_{layer_index}_output_shape = {{{', '.join(str(x) for x in out_shape)}}};\n"
@@ -142,7 +141,6 @@ auto {name_space}(const std::array<Scalar, {input_size}>& initial_input) {{
             if "kernel_shape" in conv_params and conv_params["kernel_shape"] is not None:
                 k_shape = conv_params["kernel_shape"]
                 cpp_code += f"    constexpr std::array<int, {len(k_shape)}> layer_{layer_index}_kernel_shape = {{{', '.join(str(x) for x in k_shape)}}};\n"
-            # For SeparableConv2D, output separate kernel shapes
             if conv_type == "SeparableConv2D":
                 if conv_params.get("depthwise_kernel_shape") is not None:
                     dws = conv_params["depthwise_kernel_shape"]
@@ -153,7 +151,6 @@ auto {name_space}(const std::array<Scalar, {input_size}>& initial_input) {{
             cpp_code += "\n"
         # For normalization layers (dense only)
         if norm_params is not None:
-            # norm_params = (gamma, beta, mean, variance, epsilon)
             gamma, beta, mean, variance, epsilon = norm_params
             if gamma is not None:
                 gamma_flat = gamma.flatten()
@@ -193,7 +190,6 @@ auto {name_space}(const std::array<Scalar, {input_size}>& initial_input) {{
                 act_func = 'tanhCustom'
             mapped_act = activation_func_map.get(act_func, 'linear')
             if w is not None and b is not None:
-                # Dense layer propagation using forwardPass
                 output_size = w.shape[1]
                 cpp_code += f"    std::array<Scalar, {output_size}> layer_{layer_index}_output;\n"
                 cpp_code += f"    forwardPass<Scalar, {output_size}>(layer_{layer_index}_output.data(), {last_layer}.data(), weights_{layer_index}.data(), biases_{layer_index}.data(), {last_size}, {mapped_act}, {alpha});\n\n"
@@ -225,10 +221,11 @@ auto {name_space}(const std::array<Scalar, {input_size}>& initial_input) {{
                 last_layer = f"layer_{layer_index}_output"
                 last_size = output_size
         else:
-            # New branch for Convolutional and Pooling layers
+            # Branch for Convolutional and Pooling layers
             conv_type = conv_params.get("layer_type", "")
-            # For convolution layers, assume weights and biases have been generated as constexpr arrays
             if conv_type in ["Conv2D", "Conv2DTranspose"]:
+                if conv_params.get("input_shape") is None:
+                    raise ValueError(f"Missing input_shape for convolution layer {layer_index} of type {conv_type}")
                 padding = conv_params.get("padding", "valid")
                 H_in, W_in, C_in = conv_params["input_shape"][1:4]
                 H_k, W_k, _, C_out = conv_params["kernel_shape"]
@@ -243,6 +240,8 @@ auto {name_space}(const std::array<Scalar, {input_size}>& initial_input) {{
                 last_layer = f"layer_{layer_index}_output";
                 last_size = out_size;
             elif conv_type == "DepthwiseConv2D":
+                if conv_params.get("input_shape") is None:
+                    raise ValueError(f"Missing input_shape for DepthwiseConv2D layer {layer_index}")
                 padding = conv_params.get("padding", "valid")
                 H_in, W_in, C_in = conv_params["input_shape"][1:4]
                 H_k, W_k, _, depth_multiplier = conv_params["kernel_shape"]
@@ -257,6 +256,8 @@ auto {name_space}(const std::array<Scalar, {input_size}>& initial_input) {{
                 last_layer = f"layer_{layer_index}_output";
                 last_size = out_size;
             elif conv_type == "SeparableConv2D":
+                if conv_params.get("input_shape") is None:
+                    raise ValueError(f"Missing input_shape for SeparableConv2D layer {layer_index}")
                 padding = conv_params.get("padding", "valid")
                 H_in, W_in, C_in = conv_params["input_shape"][1:4]
                 H_k, W_k, _, _ = conv_params["depthwise_kernel_shape"]
@@ -268,8 +269,7 @@ auto {name_space}(const std::array<Scalar, {input_size}>& initial_input) {{
                 for dim in out_shape:
                     out_size *= dim
                 cpp_code += f"    std::array<Scalar, {out_size}> layer_{layer_index}_output;\n"
-                # For simplicity, using separableConv2D_valid (a SAME version can be added similarly)
-                func_name = "separableConv2D_valid"
+                func_name = "separableConv2D_valid"  # Using the VALID version for simplicity
                 cpp_code += f"    {func_name}<Scalar, {H_in}, {W_in}, {C_in}, {H_k}, {W_k}, {depth_multiplier}, {C_out}, {StrideH}, {StrideW}>( {last_layer}.data(), weights_{layer_index}_depthwise.data(), weights_{layer_index}_pointwise.data(), biases_{layer_index}.data(), layer_{layer_index}_output.data() );\n\n"
                 last_layer = f"layer_{layer_index}_output";
                 last_size = out_size;
@@ -299,7 +299,6 @@ auto {name_space}(const std::array<Scalar, {input_size}>& initial_input) {{
                 last_layer = f"layer_{layer_index}_output";
                 last_size = out_size;
             else:
-                # Fallback: if unknown conv layer, pass through unchanged.
                 cpp_code += f"    // Unknown convolution/pooling layer type for layer {layer_index}; passing through unchanged.\n"
                 cpp_code += f"    std::array<Scalar, {last_size}> layer_{layer_index}_output = {last_layer};\n\n"
                 last_layer = f"layer_{layer_index}_output";

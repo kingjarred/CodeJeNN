@@ -1,77 +1,15 @@
-import os
-import absl.logging
-import warnings
-import math
-# import stdexcept  # For std::numeric_limits equivalent in C++ comments
-absl.logging.set_verbosity('error')
-warnings.filterwarnings("ignore", category=UserWarning, module='keras')
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+#pragma once
+#include <iostream>
+#include <array>
+#include <random>
+#include <cmath>
+#include <functional>
 
+// Added for convolution and pooling functions
+#include <limits>
 
-def activationFunctions(cpp_code, activation_functions):
-    """
-    generate C++ lambda-based activation functions (with no indentation for the lambdas)
-    and normalization functions. ForwardPass also remains as Code 2 style.
-    """
+//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\// 
 
-    lambda_defs = {
-        'relu': """
-    auto relu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input > 0 ? input : 0;
-    };
-""",
-        'sigmoid': """
-    auto sigmoid = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = 1 / (1 + std::exp(-input));
-    };
-""",
-        'tanhCustom': """
-    auto tanhCustom = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = std::tanh(input);
-    };
-""",
-        'leakyRelu': """
-    auto leakyRelu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input > 0 ? input : alpha * input;
-    };
-""",
-        'linear': """
-    auto linear = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input;
-    };
-""",
-        'elu': """
-    auto elu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input > 0 ? input : alpha * (std::exp(input) - 1);
-    };
-""",
-        'selu': """
-    template<typename T> constexpr T SELU_LAMBDA = static_cast<T>(1.0507009873554804934193349852946);
-    template<typename T> constexpr T SELU_ALPHA = static_cast<T>(1.6732632423543772848170429916717);
-    auto selu = [](Scalar& output, Scalar input, Scalar alpha = SELU_ALPHA<double>) noexcept {
-        using Scalar = decltype(input);
-        output = SELU_LAMBDA<Scalar> * (input > 0 ? input : alpha * (std::exp(input) - 1));
-    };
-""",
-        'swish': """
-    auto swish = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input / (1 + std::exp(-alpha * input));
-    };
-""",
-        'prelu': """
-    auto prelu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        output = input > 0 ? input : alpha * input;
-    };
-""",
-        'silu': """
-    auto silu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
-        auto sigmoid = 1 / (1 + std::exp(-input));
-        output = input * sigmoid;
-    };
-"""
-    }
-
-    layerNormalization = """
 template<typename Scalar, int size>
 void layerNormalization(Scalar* outputs, const Scalar* inputs, const Scalar* gamma, const Scalar* beta, Scalar epsilon) noexcept {
     Scalar mean = 0;
@@ -88,18 +26,14 @@ void layerNormalization(Scalar* outputs, const Scalar* inputs, const Scalar* gam
         outputs[i] = gamma[i] * ((inputs[i] - mean) / std::sqrt(variance + epsilon)) + beta[i];
     }
 }
-"""
 
-    batchNormalization = """
 template<typename Scalar, int size>
 void batchNormalization(Scalar* outputs, const Scalar* inputs, const Scalar* gamma, const Scalar* beta, const Scalar* mean, const Scalar* variance, const Scalar epsilon) noexcept {
     for (int i = 0; i < size; ++i) {
         outputs[i] = gamma[i] * ((inputs[i] - mean[i]) / std::sqrt(variance[i] + epsilon)) + beta[i];
     }
 }
-"""
 
-    forwardPass = """
 template<typename Scalar, int output_size>
 void forwardPass(Scalar* outputs, const Scalar* inputs, const Scalar* weights, const Scalar* biases, int input_size, activationFunction<Scalar> activation_function, Scalar alpha) noexcept {
     for(int i = 0; i < output_size; ++i){
@@ -111,27 +45,7 @@ void forwardPass(Scalar* outputs, const Scalar* inputs, const Scalar* weights, c
         activation_function(outputs[i], sum, alpha);
     }
 }
-"""
 
-    current_activations = set(activation_functions)
-    current_activations = {('tanhCustom' if act == 'tanh' else act) for act in current_activations if act is not None}
-
-    cpp_lambda = """    //\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\//\\\// \n"""
-
-    for act in current_activations:
-        if act in lambda_defs:
-            cpp_lambda += lambda_defs[act]
-
-    cpp_code += layerNormalization
-    cpp_code += batchNormalization
-    cpp_code += forwardPass
-
-    # ===== NEW CODE: Convolution and Pooling Functions =====
-    # The following functions implement basic versions of convolution and pooling.
-    # They assume fixed (compile-time) dimensions and valid padding for simplicity.
-    # More advanced versions (e.g. for 'same' padding, dilations, etc.) can be added similarly.
-
-    convolution_functions = r"""
 // --- Convolution Functions ---
 
 // 2D Convolution with VALID padding
@@ -342,7 +256,52 @@ void globalMaxPooling2D(const Scalar* input, Scalar* output) noexcept {
         output[c] = max_val;
     }
 }
-"""
-    cpp_code += convolution_functions
 
-    return cpp_code, cpp_lambda
+template <typename Scalar = double>
+auto example(const std::array<Scalar, 3>& initial_input) { 
+    constexpr std::array<Scalar, 3> input_norms = {9.859801248e-01, 9.792372050e-01, 9.852146633e-01};
+
+    constexpr std::array<Scalar, 3> input_mins = {3.083498694e-03, 1.103722129e-02, 6.335799082e-03};
+
+    std::array<Scalar, 3> model_input;
+    for (int i = 0; i < 3; i++) { model_input[i] = (initial_input[i] - input_mins[i]) / (input_norms[i]); }
+    if (model_input.size() != 3) { throw std::invalid_argument("Invalid input size. Expected size: 3"); } 
+    //\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\// 
+
+    //\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\//\\// 
+
+    auto tanhCustom = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
+        output = std::tanh(input);
+    };
+
+    auto linear = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
+        output = input;
+    };
+
+    auto sigmoid = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
+        output = 1 / (1 + std::exp(-input));
+    };
+
+    auto silu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
+        auto sigmoid = 1 / (1 + std::exp(-input));
+        output = input * sigmoid;
+    };
+
+    auto elu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
+        output = input > 0 ? input : alpha * (std::exp(input) - 1);
+    };
+
+    auto relu = [](Scalar& output, Scalar input, Scalar alpha) noexcept {
+        output = input > 0 ? input : 0;
+    };
+
+    //\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\//\// 
+
+    constexpr std::array<Scalar, 10> output_norms = {9.934309616e-01, 9.617949734e-01, 9.796113737e-01, 9.758307726e-01, 9.646616886e-01, 9.946274980e-01, 9.858196838e-01, 9.538358071e-01, 9.862610589e-01, 9.814134212e-01};
+
+    constexpr std::array<Scalar, 10> output_mins = {1.280830518e-03, 3.093672333e-02, 1.008834337e-02, 1.829334318e-02, 1.811821693e-02, 3.327897599e-03, 1.416018130e-02, 1.323092537e-02, 2.370498897e-03, 5.197589451e-03};
+
+    std::array<Scalar, 3> model_output;
+    for (int i = 0; i < 3; i++) { model_output[i] = (model_input[i] * output_norms[i]) + output_mins[i]; }
+    return model_output;
+}
